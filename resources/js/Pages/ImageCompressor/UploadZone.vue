@@ -1,5 +1,5 @@
-<script setup lang="typescript">
-import { ref, computed, onMounted, watch } from 'vue'
+<script setup>
+import { ref, computed, watch } from 'vue'
 import { useInertia } from '@inertiajs/vue3'
 
 const props = defineProps({
@@ -20,32 +20,32 @@ const isCompressing = ref(false)
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
 
-const handleDragOver = (e: DragEvent) => {
+const handleDragOver = (e) => {
     e.preventDefault()
-    e.dataTransfer?.effectAllowed = 'copy'
+    e.dataTransfer.effectAllowed = 'copy'
     isDragging.value = true
 }
 
-const handleDragLeave = (e: DragEvent) => {
+const handleDragLeave = (e) => {
     isDragging.value = false
 }
 
-const handleDrop = async (e: DragEvent) => {
+const handleDrop = (e) => {
     e.preventDefault()
     isDragging.value = false
 
-    const files = e.dataTransfer?.files
+    const files = e.dataTransfer.files
     if (files && files.length > 0) {
         handleFileSelect(files[0])
     }
 }
 
-const handleFileSelect = (file: File) => {
+const handleFileSelect = (file) => {
     if (!file) return
 
     // Validate file type
     const accepted = props.accepted
-    const isValidType = accepted.some((mime: string) => file.type === mime || file.name.match(new RegExp(mime.split('/')[1] + '$')))
+    const isValidType = accepted.some((mime) => file.type === mime || file.name.match(new RegExp(mime.split('/')[1] + '$')))
 
     if (!isValidType) {
         alert('Unsupported file type. Please upload JPG, JPEG, PNG, or WebP.')
@@ -62,7 +62,7 @@ const handleFileSelect = (file: File) => {
 
     // Create preview
     const reader = new FileReader()
-    reader.onload = (e: any) => {
+    reader.onload = (e) => {
         originalImage.value = e.target.result
     }
     reader.readAsDataURL(file)
@@ -103,7 +103,7 @@ const startCompression = async () => {
     }
 }
 
-const showResult = (data: any) => {
+const showResult = (data) => {
     // Trigger result display - will be handled by parent
     updateProgress?.('show-result', data)
 }
