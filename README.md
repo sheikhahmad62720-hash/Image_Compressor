@@ -10,7 +10,7 @@ A single-page image compression tool built with Laravel, Vue 3, Inertia.js, and 
 - EXIF orientation handling so previews always look correct.
 - Original file is never modified — a new compressed copy is generated for download.
 - Side-by-side before/after preview with size and reduction stats.
-- Fully client-side flow: nothing leaves your browser until you click compress (the file is processed on the server, results are streamed back as a base64 download).
+- Fully client-side flow: you only send the image when you click compress; the optimized result comes back as a base64 data URL for instant preview and download.
 
 ## Tech Stack
 
@@ -20,7 +20,7 @@ A single-page image compression tool built with Laravel, Vue 3, Inertia.js, and 
 
 ## Requirements
 
-- PHP 8.3+ with the GD extension (bundled with PHP: `php -m | grep gd`)
+- PHP 8.3+ with the GD extension (check with `php -m | grep -i gd`)
 - Composer
 - Node.js 18+ and npm
 
@@ -50,22 +50,52 @@ Open http://localhost:8000 in your browser.
 
 ## Commands
 
-| Command               | Description                              |
-| --------------------- | ---------------------------------------- |
-| `npm run dev`         | Start the Vite dev server (hot reload)   |
-| `npm run build`       | Compile and minify production assets      |
-| `php artisan serve`   | Start the Laravel server on port 8000     |
-| `php artisan test`    | Run the test suite                       |
+| Command               | Description                            |
+| --------------------- | -------------------------------------- |
+| `npm run dev`         | Start the Vite dev server (hot reload) |
+| `npm run build`       | Compile and minify production assets    |
+| `php artisan serve`   | Start the Laravel server on port 8000   |
+| `php artisan test`    | Run the test suite                     |
 
-> Note: after running `npm run build`, remove the `public/hot` file if it exists so Laravel serves the production assets instead of a stale dev-server URL.
+> **Note:** after `npm run build`, remove the `public/hot` file if it exists — otherwise Laravel injects a stale dev-server URL and the page loads blank.
 
 ## How It Works
 
 1. The browser uploads the image to `POST /compress` with a CSRF token.
 2. `ImageCompressionService` decodes the image once, then:
-   - re-encodes it at descending JPEG/WebP quality (95 → 45) until it fits under 1 MB;
+   - re-encodes it at descending JPEG/WebP quality (95 → 45) until it fits under 1 MB (PNG is encoded once — its output is lossless and quality-independent);
    - if that is not enough, it progressively downscales the image until the target is met.
 3. The compressed bytes are returned as base64, and the client builds a downloadable data URL and shows the before/after comparison.
+
+## API
+
+### `POST /compress`
+
+Multipart form: `image` (file) and `_token` (CSRF token).
+
+**Success (200):**
+
+```json
+{
+  "success": true,
+  "compressed_data": "<base64 encoded image>",
+  "original_size": 11095475,
+  "compressed_size": 953764,
+  "compression_percent": 91,
+  "dimensions": "4096x2731",
+  "format": "jpg",
+  "reduced": true
+}
+```
+
+**Validation error (422):** `{ "success": false, "error": "<message>" }`
+**Server error (500):** `{ "success": false, "error": "An error occurred while compressing your image. Please try again." }`
+
+## Troubleshooting
+
+- **Compression stops around 90% or errors out:** the progress bar is cosmetic; the real request failed. Check `storage/logs/laravel.log`. The service raises its own memory (512M) and time (300s) limits, so common causes are an unsupported/corrupt file or PHP's GD missing a codec.
+- **Blank page / no UI:** a stale `public/hot` file pointing to a dead Vite server — delete it and refresh.
+- **Slow on huge photos:** large images are capped at a 4096-px long edge before encoding. A 24 MP photo takes roughly 10 seconds to process; `php artisan serve` is single-threaded, so use a real web server (nginx/Apache) for production.
 
 ## Project Structure
 
@@ -74,7 +104,7 @@ app/
   Http/Controllers/ImageCompressionController.php  # Validate + compress endpoint
   Services/ImageCompressionService.php            # Core compression logic
 resources/
-  js/Pages/ImageCompressor.vue                    # Main page (upload/result phases)
+  js/Pages/ImageCompressor.vue                    # Main page (upload/compress/result phases)
   js/Pages/ImageCompressor/                       # UploadZone, Result, Preview… components
   views/app.blade.php                             # Root layout (Inertia + CSRF meta)
 routes/web.php                                    # GET / and POST /compress
