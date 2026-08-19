@@ -1,108 +1,57 @@
-<script setup lang="typescript">
-defineProps({
-    originalImage: {
+<script setup>
+import { computed } from 'vue'
+
+const props = defineProps({
+    image: {
         type: String,
         default: null,
     },
-    originalSize: {
+    imageSize: {
         type: Number,
         default: 0,
     },
-    originalDimensions: {
+    dimensions: {
         type: String,
-        default: '0x0',
+        default: '',
     },
-    compressedImage: {
+    label: {
         type: String,
-        default: null,
+        default: '',
     },
-    compressedSize: {
-        type: Number,
-        default: 0,
-    },
-    compressedDimensions: {
+    overlayClass: {
         type: String,
-        default: '0x0',
-    },
-    format: {
-        type: String,
-        default: 'jpg',
-    },
-    compressionPercent: {
-        type: Number,
-        default: 0,
-    },
-    showComparison: {
-        type: Boolean,
-        default: false,
+        default: 'bg-black/60',
     },
 })
+
+const sizeLabel = computed(() => formatBytes(props.imageSize))
+
+function formatBytes(bytes) {
+    if (!bytes) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(1024))
+    return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
 </script>
 
 <template>
-    <Transition name="fade">
-        <div v-if="showComparison || originalImage" class="relative">
-            <!-- Original Image -->
-            <div 
-                v-if="originalImage"
-                class="rounded-2xl border border-gray-200 overflow-hidden shadow-lg transition-all duration-300 hover:shadow-xl"
-                :class="{ 'opacity-50': !showComparison }">
-                <img 
-                    :src="originalImage"
-                    alt="Original image"
-                    class="w-full h-auto" />
-                <div class="absolute bottom-2 left-2 right-2 bg-black/60 text-white text-xs py-1">
-                    <div class="flex items-center gap-2">
-                        <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16l-4-4 4-4"/>
-                        </svg>
-                        <span>Original: {{ originalSize }} bytes</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16l-4-4 4-4"/>
-                        </svg>
-                        <span>{{ originalDimensions }}</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Compressed Image -->
-            <div 
-                v-if="compressedImage"
-                class="rounded-2xl border border-gray-200 overflow-hidden shadow-lg mt-4 transition-all duration-300"
-                style="max-height: 400px;">
-                <img 
-                    :src="compressedImage"
-                    alt="Compressed image"
-                    class="w-full h-auto" />
-                <div class="absolute bottom-2 left-2 right-2 bg-black/80 text-white text-xs py-1">
-                    <div class="flex items-center gap-2">
-                        <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16l-4-4 4-4"/>
-                        </svg>
-                        <span>Compressed: {{ compressedSize }} bytes</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16l-4-4 4-4"/>
-                        </svg>
-                        <span>{{ compressedDimensions }}</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Comparison Labels -->
-            <div v-if="showComparison" class="grid grid-cols-2 gap-4 px-4 py-2 text-xs font-medium">
-                <div class="flex items-center justify-between">
-                    <span class="text-gray-300">Original</span>
-                    <span class="text-indigo-400 font-medium">8.2 MB</span>
-                </div>
-                <div class="flex items-center justify-between">
-                    <span class="text-gray-300">Compressed</span>
-                    <span class="text-green-400 font-medium">824 KB</span>
-                </div>
+    <div class="relative overflow-hidden rounded-2xl border border-gray-200 bg-gray-100 shadow-sm">
+        <img
+            v-if="image"
+            :src="image"
+            :alt="label || 'Image preview'"
+            class="w-full h-auto max-h-[420px] object-contain"
+        />
+        <div v-else class="flex h-64 items-center justify-center">
+            <div class="flex h-16 w-16 animate-pulse items-center justify-center rounded-xl bg-gray-200">
+                <svg class="h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
             </div>
         </div>
-    </Transition>
+        <div :class="['absolute bottom-0 inset-x-0 flex items-center justify-between px-4 py-2 text-xs text-white', overlayClass]">
+            <span>{{ label }}</span>
+            <span class="font-medium">{{ dimensions ? `${dimensions} · ` : '' }}{{ sizeLabel }}</span>
+        </div>
+    </div>
 </template>
