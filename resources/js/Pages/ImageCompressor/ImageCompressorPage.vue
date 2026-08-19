@@ -1,4 +1,4 @@
-<script setup lang="typescript">
+<script setup>
 import { ref, computed, watch } from 'vue'
 import { useInertia } from '@inertiajs/vue3'
 import UploadZone from '@/Pages/ImageCompressor/UploadZone.vue'
@@ -34,7 +34,7 @@ watch(showResult, (value) => {
     }
 })
 
-const handleFileSelect = (file: File) => {
+const handleFileSelect = (file) => {
     if (!file) return
 
     // Validate file type
@@ -56,7 +56,7 @@ const handleFileSelect = (file: File) => {
 
     // Create preview
     const reader = new FileReader()
-    reader.onload = (e: any) => {
+    reader.onload = (e) => {
         originalImage.value = e.target.result
     }
     reader.readAsDataURL(file)
@@ -108,7 +108,6 @@ const startCompression = async () => {
 
 const handleDownload = () => {
     // Trigger download - the DownloadButton will handle it
-    // This is just a placeholder for any client-side download logic
 }
 
 const reset = () => {
