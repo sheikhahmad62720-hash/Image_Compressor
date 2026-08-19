@@ -44,6 +44,13 @@ class ImageCompressionService
      */
     public function compress(UploadedFile $file): array
     {
+        // Image decoding/encoding is memory-hungry (a 24MP photo alone needs
+        // ~190MB with the encode clone); raise the ceiling for this request.
+        $currentLimit = (int) ini_get('memory_limit');
+        if ($currentLimit > 0 && $currentLimit < 512) {
+            ini_set('memory_limit', '512M');
+        }
+
         $originalSize = $file->getSize();
         $format = $this->formatFromMime($file->getMimeType() ?? $file->guessExtension());
 
