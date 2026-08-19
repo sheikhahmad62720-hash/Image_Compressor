@@ -16,7 +16,6 @@ Route::get('/', function () {
 });
 
 Route::post('/compress', [ImageCompressionController::class, 'compress']);
-Route::get('/download', [ImageCompressionController::class, 'download']);
 
 Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');

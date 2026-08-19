@@ -32,8 +32,8 @@ function readAsDataUrl(file) {
 }
 
 function getCsrfToken() {
-    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/)
-    return match ? decodeURIComponent(match[1]) : null
+    const meta = document.querySelector('meta[name="csrf-token"]')
+    return meta ? meta.getAttribute('content') : ''
 }
 
 async function handleFileSelect(file) {
@@ -57,12 +57,12 @@ async function compress() {
     try {
         const formData = new FormData()
         formData.append('image', selectedFile.value)
+        formData.append('_token', getCsrfToken())
 
         const response = await fetch('/compress', {
             method: 'POST',
             body: formData,
             headers: {
-                'X-XSRF-TOKEN': getCsrfToken() || '',
                 'Accept': 'application/json',
             },
         })

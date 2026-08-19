@@ -2,180 +2,197 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Str;
-use Intervention\Image\ImageManagerStatic as Image;
+use Illuminate\Http\UploadedFile;
 use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\Encoders\JpegEncoder;
+use Intervention\Image\Encoders\PngEncoder;
+use Intervention\Image\Encoders\WebpEncoder;
+use Intervention\Image\Exceptions\NotSupportedException;
+use Intervention\Image\Exceptions\RuntimeException;
+use Intervention\Image\ImageManager;
+use InvalidArgumentException;
 
 class ImageCompressionService
 {
-    public const TARGET_MAX_SIZE = 1 * 1024 * 1024; // 1 MB in bytes
-    public const QUALITY_STEP = 5;
-    public const MIN_QUALITY = 30;
-    public const MAX_QUALITY = 95;
+    public const TARGET_MAX_SIZE = 1 * 1024 * 1024; // 1 MB
+
+    public const QUALITY_STEPS = [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30];
+
+    public const MIN_DIMENSION = 320;
+
+    protected ImageManager $manager;
+
+    public function __construct()
+    {
+        $this->manager = new ImageManager(new Driver());
+    }
 
     /**
-     * Compress an image to under 1 MB while preserving quality.
+     * Compress an uploaded image to under 1 MB while preserving as much
+     * quality as possible. The original file is never modified.
      *
-     * @param  \Illuminate\Http\UploadedFile  $file
-     * @return array{compressed_path: string, original_size: int, compressed_size: int, compression_percent: int, dimensions: string, format: string}
+     * @return array{
+     *     data: string,
+     *     original_size: int,
+     *     compressed_size: int,
+     *     compression_percent: int,
+     *     dimensions: string,
+     *     format: string,
+     *     reduced: bool
+     * }
      */
-    public function compress($file)
+    public function compress(UploadedFile $file): array
     {
-        $originalPath = $file->getRealPath();
-        $originalName = $file->getClientOriginalName();
         $originalSize = $file->getSize();
-        $originalMime = $file->getMimeType();
+        $format = $this->formatFromMime($file->getMimeType() ?? $file->guessExtension());
 
-        // Validate format
-        $allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-        if (!in_array($originalMime, $allowedMime, true)) {
-            throw new \InvalidArgumentException('Unsupported image format');
+        $source = $file->getRealPath();
+
+        try {
+            $image = $this->manager->decodePath($source);
+        } catch (\Throwable $e) {
+            throw new InvalidArgumentException('The uploaded file is not a valid image or is corrupted.');
         }
 
-        // Determine format and extension
-        $format = $this->determineFormat($originalMime);
-        $extension = $format === 'jpeg' ? 'jpg' : $format;
+        $width = $image->width();
+        $height = $image->height();
 
-        // Get original dimensions
-        $originalImage = Image::make($originalPath);
-        $width = $originalImage->width();
-        $height = $originalImage->height();
+        // Apply EXIF orientation so previews look correct.
+        try {
+            $image->orient();
+        } catch (\Throwable $e) {
+            // Best effort; ignore orientation failures.
+        }
 
-        // Try lossless optimization first
-        $compressedPath = tempnam(sys_get_temp_dir(), 'img_comp_') . '.'.$extension;
-        $compressedSize = $this->tryLosslessOptimization($originalPath, $compressedPath, $format);
-
-        // If already under 1 MB, return
-        if ($compressedSize <= self::TARGET_MAX_SIZE) {
-            $dimensions = "{$width}x{$height}";
+        // Edge case: already at or below the 1 MB target.
+        if ($originalSize <= self::TARGET_MAX_SIZE) {
             return [
-                'compressed_path' => $compressedPath,
+                'data' => (string) $this->encode($source, $format, 95),
                 'original_size' => $originalSize,
-                'compressed_size' => $compressedSize,
-                'compression_percent' => round(100 - ($compressedSize * 100 / $originalSize)),
-                'dimensions' => $dimensions,
-                'format' => $extension,
+                'compressed_size' => $originalSize,
+                'compression_percent' => 0,
+                'dimensions' => "{$width}x{$height}",
+                'format' => $format,
+                'reduced' => false,
             ];
         }
 
-        // Gradually reduce quality if still over 1 MB
-        $quality = self::MAX_QUALITY;
-        while ($quality >= self::MIN_QUALITY) {
-            $tempCompressed = tempnam(sys_get_temp_dir(), 'img_comp_') . '.'.$extension;
-            $size = $this->compressWithQuality($originalPath, $tempCompressed, $quality, $format);
+        // Pass 1: high quality / lossless-style optimization.
+        $candidate = $this->encode($source, $format, self::QUALITY_STEPS[0]);
+        $size = strlen($candidate);
 
-            if ($size <= self::TARGET_MAX_SIZE) {
-                $compressedPath = $tempCompressed;
-                $compressedSize = $size;
-                break;
-            }
-            $quality -= self::QUALITY_STEP;
+        // Pass 2: gradually walk down in quality until we fit the target.
+        if ($size > self::TARGET_MAX_SIZE) {
+            $candidate = $this->walkQuality($source, $format, $width, $height);
+            $size = strlen($candidate);
         }
 
-        // If we've exhausted quality and still over 1 MB, do minimal resize as last resort
-        if (!isset($compressedPath) || $compressedSize > self::TARGET_MAX_SIZE) {
-            $compressedPath = $this->tryResizing($originalPath, $extension);
-            $compressedSize = filesize($compressedPath);
+        // Pass 3: last resort - a modest, proportional downscale keeps quality
+        // acceptable while still slashing the byte count.
+        if ($size > self::TARGET_MAX_SIZE) {
+            [$width, $height] = $this->scaledDimensions($width, $height);
+            $candidate = $this->walkQuality($source, $format, $width, $height);
+            $size = strlen($candidate);
         }
 
-        // If still over 1 MB, note it
-        $compressionPercent = round(100 - ($compressedSize * 100 / $originalSize));
-
-        $dimensions = "{$width}x{$height}";
+        $compressionPercent = $originalSize > 0
+            ? (int) round(100 - ($size * 100 / $originalSize))
+            : 0;
 
         return [
-            'compressed_path' => $compressedPath,
+            'data' => $candidate,
             'original_size' => $originalSize,
-            'compressed_size' => $compressedSize,
-            'compression_percent' => $compressionPercent,
-            'dimensions' => $dimensions,
-            'format' => $extension,
+            'compressed_size' => $size,
+            'compression_percent' => max(0, $compressionPercent),
+            'dimensions' => "{$width}x{$height}",
+            'format' => $format,
+            'reduced' => true,
         ];
     }
 
     /**
-     * Try lossless optimization first.
+     * Re-encode the source at a series of decreasing quality levels and keep
+     * the first result that fits the target size. If none fit, the smallest
+     * result is returned.
      */
-    protected function tryLosslessOptimization(string $source, string $destination, string $format): int
+    protected function walkQuality(string $source, string $format, int $width, int $height): string
     {
-        try {
-            $image = Image::make($source);
-            $image->optimize();
-            $image->save($destination);
-            return filesize($destination);
-        } catch (\Exception $e) {
-            // Fall back to saving without optimization
-            $this->saveImage($source, $destination, $format, 100);
-            return filesize($destination);
-        }
-    }
+        $best = '';
+        $bestSize = PHP_INT_MAX;
 
-    /**
-     * Compress image with specific quality.
-     */
-    protected function compressWithQuality(string $source, string $destination, int $quality, string $format): int
-    {
-        $this->saveImage($source, $destination, $format, $quality);
-        return filesize($destination);
-    }
+        foreach (self::QUALITY_STEPS as $quality) {
+            // Re-read from source each time so we never cascade quality loss.
+            $image = $this->manager->decodePath($source);
 
-    /**
-     * Save image with specified quality.
-     */
-    protected function saveImage(string $source, string $destination, string $format, int $quality): void
-    {
-        $image = Image::make($source);
+            if ($width !== $image->width() || $height !== $image->height()) {
+                $image->scale($width, $height);
+            }
 
-        // Apply format-specific settings
-        if ($format === 'jpeg' || $format === 'jpg') {
-            $image->encode('quality', $quality);
-            $image->orientate(); // auto-orient based on EXIF
+            $candidate = $this->encode($image, $format, $quality);
+            $size = strlen($candidate);
+
+            if ($size < $bestSize) {
+                $best = $candidate;
+                $bestSize = $size;
+            }
+
+            if ($size <= self::TARGET_MAX_SIZE) {
+                return $candidate;
+            }
         }
 
-        $image->save($destination);
+        return $best;
     }
 
     /**
-     * Determine image format from MIME type.
+     * Encode an image (or path) to the target format.
+     *
+     * @param  \Intervention\Image\Interfaces\ImageInterface|string  $image
      */
-    protected function determineFormat(string $mime): string
+    protected function encode($image, string $format, int $quality): string
     {
-        return match($mime) {
-            'image/jpeg', 'image/jpg' => 'jpeg',
+        if (is_string($image)) {
+            $image = $this->manager->decodePath($image);
+        }
+
+        $encoded = match ($format) {
+            'webp' => $image->encode(new WebpEncoder(quality: $quality)),
+            'png' => $image->encode(new PngEncoder()),
+            default => $image->encode(new JpegEncoder(quality: $quality)),
+        };
+
+        return $encoded->toString();
+    }
+
+    /**
+     * Compute a modestly downscaled dimension pair that keeps aspect ratio
+     * and never goes below a usable minimum size.
+     *
+     * @return array{int, int}
+     */
+    protected function scaledDimensions(int $width, int $height): array
+    {
+        $scale = 0.8;
+
+        $nextWidth = (int) max(round($width * $scale), self::MIN_DIMENSION);
+        $nextHeight = (int) max(round($height * $scale), self::MIN_DIMENSION);
+
+        if ($width > $height) {
+            $nextHeight = (int) max(round($nextWidth * ($height / $width)), self::MIN_DIMENSION);
+        } else {
+            $nextWidth = (int) max(round($nextHeight * ($width / $height)), self::MIN_DIMENSION);
+        }
+
+        return [$nextWidth, $nextHeight];
+    }
+
+    protected function formatFromMime(?string $mime): string
+    {
+        return match (strtolower((string) $mime)) {
             'image/png' => 'png',
             'image/webp' => 'webp',
-            default => 'jpeg',
+            'image/jpeg', 'image/jpg' => 'jpg',
+            default => throw new InvalidArgumentException('Unsupported image format. Please upload a JPG, PNG, or WebP file.'),
         };
-    }
-
-    /**
-     * Try resizing as last resort to meet size target.
-     */
-    protected function tryResizing(string $source, string $extension): string
-    {
-        $image = Image::make($source);
-        $width = $image->width();
-        $height = $image->height();
-
-        // Calculate new dimensions maintaining aspect ratio for 1MB target
-        $targetRatio = 1.0; // square target for simplicity
-        $imageRatio = $width / $height;
-
-        if ($imageRatio > $targetRatio) {
-            $newWidth = intval($height * $targetRatio);
-            $newHeight = $height;
-        } else {
-            $newWidth = $width;
-            $newHeight = intval($width / $targetRatio);
-        }
-
-        // Ensure minimum dimensions
-        $newWidth = max($newWidth, 400);
-        $newHeight = max($newHeight, 400);
-
-        $image->resize($newWidth, $newHeight, fn ($constraint) => $constraint->aspectRatio());
-        $image->save($destination);
-
-        return $destination;
     }
 }
