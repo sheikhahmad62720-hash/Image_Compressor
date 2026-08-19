@@ -15,18 +15,7 @@ defineProps({
 })
 
 defineEmits(['clicked'])
-</script>
 
-<template>
-    <button 
-        @click="handleDownload"
-        class="w-full rounded-2xl border border-indigo-600 bg-indigo-600 px-6 py-3 text-lg font-medium uppercase tracking-widest text-white transition-all duration-200 hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
-        aria-label="Download compressed image">
-        <slot />
-    </button>
-</template>
-
-<script setup>
 const emit = defineEmits(['clicked'])
 
 const handleDownload = async () => {
@@ -68,3 +57,12 @@ const handleDownload = async () => {
     }
 }
 </script>
+
+<template>
+    <button 
+        @click="handleDownload"
+        class="w-full rounded-2xl border border-indigo-600 bg-indigo-600 px-6 py-3 text-lg font-medium uppercase tracking-widest text-white transition-all duration-200 hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+        aria-label="Download compressed image">
+        <slot />
+    </button>
+</template>

@@ -11,6 +11,18 @@ defineProps({
 })
 
 defineEmits(['update:visible'])
+
+const emit = defineEmits(['update:visible'])
+const visible = ref(true)
+
+watch([props.progress], () => {
+    if (props.progress >= 100) {
+        setTimeout(() => {
+            visible.value = false
+            emit('update:visible', false)
+        }, 1500)
+    }
+})
 </script>
 
 <template>
@@ -43,28 +55,3 @@ defineEmits(['update:visible'])
         </div>
     </Transition>
 </template>
-
-<script setup>
-const props = defineProps({
-    progress: {
-        type: Number,
-        default: 0,
-    },
-    message: {
-        type: String,
-        default: 'Compressing...',
-    },
-})
-
-const emit = defineEmits(['update:visible'])
-const visible = ref(true)
-
-watch([props.progress], () => {
-    if (props.progress >= 100) {
-        setTimeout(() => {
-            visible.value = false
-            emit('update:visible', false)
-        }, 1500)
-    }
-})
-</script>
