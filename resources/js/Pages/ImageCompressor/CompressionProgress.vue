@@ -31,7 +31,7 @@ defineEmits(['update:visible'])
 
                 <div class="h-8 rounded-full bg-gray-200 overflow-hidden">
                     <div 
-                        class="h-full bg-indigo-600 w-[[ progress ]]% transition-width duration-500 ease-out"
+                        class="h-full bg-indigo-600 transition-width duration-500 ease-out"
                         :style="{ width: progress + '%' }" 
                         aria-valuemin="0"
                         aria-valuemax="100"
