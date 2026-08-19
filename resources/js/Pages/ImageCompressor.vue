@@ -1,183 +1,208 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
-import UploadZone from '@/Pages/ImageCompressor/UploadZone.vue'
-import ImagePreview from '@/Pages/ImageCompressor/ImagePreview.vue'
-import CompressionProgress from '@/Pages/ImageCompressor/CompressionProgress.vue'
-import CompressionResult from '@/Pages/ImageCompressor/CompressionResult.vue'
-import DownloadButton from '@/Pages/ImageCompressor/DownloadButton.vue'
-import Notification from '@/Pages/ImageCompressor/Notification.vue'
+import { ref, computed, onUnmounted } from 'vue'
+import UploadZone from './ImageCompressor/UploadZone.vue'
+import CompressionProgress from './ImageCompressor/CompressionProgress.vue'
+import CompressionResult from './ImageCompressor/CompressionResult.vue'
+import Notification from './ImageCompressor/Notification.vue'
 
 const selectedFile = ref(null)
-const originalImage = ref(null)
+const originalPreview = ref('')
 const compressionProgress = ref(0)
 const isCompressing = ref(false)
-const showResult = ref(false)
-const result = ref({
-    compressed_path: '',
-    original_size: 0,
-    compressed_size: 0,
-    compression_percent: 0,
-    dimensions: '',
-    format: 'jpg',
-    showComparison: false,
-})
+const phase = ref('upload') // 'upload' | 'compressing' | 'result'
+const result = ref(null)
+const notification = ref(null)
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
+let progressTimer = null
 
-const handleFileSelect = (file) => {
-    if (!file) return
-
-    // Validate file type
-    const acceptedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-    const isValidType = acceptedTypes.includes(file.type)
-
-    if (!isValidType) {
-        alert('Unsupported file type. Please upload JPG, JPEG, PNG, or WebP.')
-        return
-    }
-
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-        alert('File is too large. Maximum size is 20MB.')
-        return
-    }
-
-    selectedFile.value = file
-
-    // Create preview
-    const reader = new FileReader()
-    reader.onload = (e) => {
-        originalImage.value = e.target.result
-    }
-    reader.readAsDataURL(file)
-
-    // Start compression automatically
-    startCompression()
+function formatBytes(bytes) {
+    if (!bytes) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(1024))
+    return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
-const startCompression = async () => {
-    if (!selectedFile.value || isCompressing.value) return
+function readAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = (e) => resolve(e.target.result)
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+    })
+}
 
-    isCompressing.value = true
+function getCsrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/)
+    return match ? decodeURIComponent(match[1]) : null
+}
+
+async function handleFileSelect(file) {
+    selectedFile.value = file
+    originalPreview.value = await readAsDataUrl(file)
+    phase.value = 'compressing'
     compressionProgress.value = 0
 
+    // Friendly simulated progress so the UI feels responsive.
+    let fake = 5
+    progressTimer = setInterval(() => {
+        fake = Math.min(90, fake + Math.random() * 9)
+        compressionProgress.value = Math.round(fake)
+    }, 250)
+
+    compress()
+}
+
+async function compress() {
+    isCompressing.value = true
     try {
         const formData = new FormData()
         formData.append('image', selectedFile.value)
 
-        // Send to Laravel for compression
         const response = await fetch('/compress', {
             method: 'POST',
             body: formData,
+            headers: {
+                'X-XSRF-TOKEN': getCsrfToken() || '',
+                'Accept': 'application/json',
+            },
         })
 
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+
+        stopProgress(false)
 
         if (!response.ok) {
-            throw new Error(data.error || 'Compression failed')
+            throw new Error(data.error || 'Compression failed. Please try again.')
         }
 
-        // Update result state
-        result.value = {
-            compressed_path: data.compressed_path,
-            original_size: data.original_size,
-            compressed_size: data.compressed_size,
-            compression_percent: data.compression_percent,
-            dimensions: data.dimensions,
-            format: data.format,
-        }
-
-        showResult.value = true
+        clearInterval(progressTimer)
         compressionProgress.value = 100
+
+        const compressedBytes = data.compressed_size
+        const compressedDataUrl = `data:image/${data.format};base64,${data.compressed_data}`
+        const ext = data.format === 'jpeg' ? 'jpg' : data.format
+
+        result.value = {
+            originalSize: selectedFile.value.size,
+            compressedSize: compressedBytes,
+            compressionPercent: data.compression_percent,
+            dimensions: data.dimensions,
+            format: ext,
+            originalPreview: originalPreview.value,
+            compressedPreview: compressedDataUrl,
+            dataUrl: compressedDataUrl,
+            fileName: `compressed-image.${ext}`,
+        }
+
+        setTimeout(() => {
+            phase.value = 'result'
+            isCompressing.value = false
+        }, 500)
     } catch (error) {
-        console.error('Compression error:', error)
-    } finally {
+        stopProgress(false)
         isCompressing.value = false
+        phase.value = 'upload'
+        showNotification(error.message || 'Something went wrong.', 'error')
+        selectedFile.value = null
+        originalPreview.value = ''
     }
 }
 
-const handleDownload = () => {
-    // Trigger download - the DownloadButton will handle it
+function stopProgress(finish = false) {
+    if (progressTimer) {
+        clearInterval(progressTimer)
+        progressTimer = null
+    }
+    if (finish) compressionProgress.value = 100
 }
 
-const reset = () => {
+function showNotification(message, type = 'success') {
+    notification.value = { message, type }
+    setTimeout(() => {
+        notification.value = null
+    }, 3500)
+}
+
+function reset() {
+    stopProgress(false)
     selectedFile.value = null
-    originalImage.value = null
-    showResult.value = false
-    result.value = {
-        compressed_path: '',
-        original_size: 0,
-        compressed_size: 0,
-        compression_percent: 0,
-        dimensions: '',
-        format: 'jpg',
-    }
+    originalPreview.value = ''
+    result.value = null
+    isCompressing.value = false
+    phase.value = 'upload'
 }
+
+onUnmounted(() => stopProgress(false))
+
+const stepDescription = computed(() => {
+    if (!selectedFile.value) return ''
+    return `${formatBytes(selectedFile.value.size)} · ${selectedFile.value.name}`
+})
 </script>
 
 <template>
-    <div class="min-h-screen bg-gray-50">
-        <!-- Header/Hero Section -->
-        <header class="border-b border-gray-200">
-            <div class="max-w-7xl mx-auto px-6 py-8">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h1 class="text-4xl font-extrabold tracking-tight text-gray-900">
-                            Image Compressor
-                        </h1>
-                        <p class="mt-2 text-lg text-gray-600">
-                            Compress Images Without Losing Quality
-                        </p>
-                        <p class="mt-3 text-sm text-gray-500">
-                            Reduce your image size to under 1 MB while keeping it sharp, clear, and visually close to the original.
-                        </p>
+    <div class="min-h-screen bg-gradient-to-b from-gray-50 via-white to-indigo-50/50 font-sans text-gray-900">
+        <div class="mx-auto flex max-w-5xl flex-col px-6 py-12 sm:py-16">
+            <!-- Hero -->
+            <header class="mb-10 text-center">
+                <p class="mb-3 inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-1 text-xs font-semibold uppercase tracking-wider text-indigo-700">
+                    <span class="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                    Free &amp; Private · Runs in your browser
+                </p>
+                <h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl">
+                    <span class="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Image Compressor</span>
+                </h1>
+                <p class="mt-4 text-xl font-semibold text-gray-800">Compress Images Without Losing Quality</p>
+                <p class="mx-auto mt-3 max-w-2xl text-base text-gray-500">
+                    Reduce your image size to under 1&nbsp;MB while keeping it sharp, clear, and visually close to the original.
+                </p>
+            </header>
+
+            <!-- Main card -->
+            <main class="mx-auto w-full max-w-3xl rounded-3xl border border-gray-200 bg-white p-6 shadow-xl shadow-gray-200/50 sm:p-10">
+                <!-- Upload phase -->
+                <section v-if="phase === 'upload'" class="space-y-6">
+                    <UploadZone @file-selected="handleFileSelect" />
+                    <div class="flex items-center justify-center gap-6 text-xs font-medium text-gray-400">
+                        <span>JPG</span>
+                        <span class="h-1 w-1 rounded-full bg-gray-300" />
+                        <span>JPEG</span>
+                        <span class="h-1 w-1 rounded-full bg-gray-300" />
+                        <span>PNG</span>
+                        <span class="h-1 w-1 rounded-full bg-gray-300" />
+                        <span>WebP</span>
                     </div>
+                </section>
 
-                    <!-- Upload Zone Call to Action -->
-                    <div class="flex items-center space-x-3">
-                        <UploadZone
-                            ref="uploadZone"
-                            @file-selected="handleFileSelect"
-                            />
+                <!-- Compressing phase -->
+                <section v-else-if="phase === 'compressing'" class="space-y-6">
+                    <div class="overflow-hidden rounded-2xl border border-gray-200">
+                        <img :src="originalPreview" alt="Your image" class="max-h-72 w-full object-contain" />
                     </div>
-                </div>
-            </div>
-        </header>
+                    <p class="text-center text-xs font-medium text-gray-500">{{ stepDescription }}</p>
+                    <CompressionProgress :progress="compressionProgress" message="Compressing your image…" />
+                </section>
 
-        <!-- Main Content -->
-        <main class="max-w-7xl mx-auto px-6 py-8">
-
-            <!-- Upload Area -->
-            <template v-if="!selectedFile">
-                <div class="border-4 border-dashed border-gray-200 rounded-2xl cursor-pointer transition-all bg-white min-h-[200px] flex items-center justify-center p-8 text-center">
-                    <svg class="w-12 h-12 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0-8l-4 4m4 4l-4-4m6 7a9 9 0 11-18 0 9 9 0 0118 0"/>
-                    </svg>
-                    <p class="text-gray-500 text-sm mb-2">Drag your image here</p>
-                    <p class="text-gray-400 text-sm">or click to browse</p>
-                    <input
-                        type="file"
-                        accept="image/jpeg,image/jpg,image/png,image/webp"
-                        class="hidden"
-                        @change="handleFileSelect($event.target.files[0])" />
-                </div>
-            </template>
-
-            <!-- Compression Progress -->
-            <template v-if="selectedFile && !showResult">
-                <CompressionProgress
-                    :progress="compressionProgress"
-                    :message="'Analyzing and compressing image...'" />
-            </template>
-
-            <!-- Result Section -->
-            <template v-if="showResult">
-                <CompressionResult
-                    :result="result"
-                    @download="handleDownload"
-                    @compress-another="reset"
+                <!-- Result phase -->
+                <section v-else-if="phase === 'result' && result">
+                    <CompressionResult
+                        :result="result"
+                        @compress-another="reset"
+                        @downloaded="showNotification('Image downloaded successfully!', 'success')"
                     />
+                </section>
+            </main>
+
+            <footer class="mt-10 text-center text-xs text-gray-400">
+                Your original file is never modified — a new optimized copy is created for download.
+            </footer>
+        </div>
+
+        <!-- Toast -->
+        <div class="pointer-events-none fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+            <template v-if="notification">
+                <Notification :message="notification.message" :type="notification.type" />
             </template>
-        </main>
+        </div>
     </div>
 </template>
