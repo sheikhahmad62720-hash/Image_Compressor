@@ -7,18 +7,19 @@ use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\Encoders\JpegEncoder;
 use Intervention\Image\Encoders\PngEncoder;
 use Intervention\Image\Encoders\WebpEncoder;
-use Intervention\Image\Exceptions\NotSupportedException;
-use Intervention\Image\Exceptions\RuntimeException;
 use Intervention\Image\ImageManager;
+use Intervention\Image\Interfaces\ImageInterface;
 use InvalidArgumentException;
 
 class ImageCompressionService
 {
     public const TARGET_MAX_SIZE = 1 * 1024 * 1024; // 1 MB
 
-    public const QUALITY_STEPS = [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45, 40, 35, 30];
+    public const QUALITY_STEPS = [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45];
 
-    public const MIN_DIMENSION = 320;
+    public const MAX_LONG_EDGE = 4096;
+
+    public const MIN_LONG_EDGE = 256;
 
     protected ImageManager $manager;
 
@@ -49,25 +50,34 @@ class ImageCompressionService
         $source = $file->getRealPath();
 
         try {
+            // Decode exactly once. The decoded buffer is reused across every
+            // quality step, so memory stays flat (crucial under a 128M limit).
             $image = $this->manager->decodePath($source);
         } catch (\Throwable $e) {
             throw new InvalidArgumentException('The uploaded file is not a valid image or is corrupted.');
         }
 
-        $width = $image->width();
-        $height = $image->height();
-
-        // Apply EXIF orientation so previews look correct.
         try {
+            // Apply EXIF orientation so previews look correct.
             $image->orient();
         } catch (\Throwable $e) {
             // Best effort; ignore orientation failures.
         }
 
+        $width = $image->width();
+        $height = $image->height();
+
+        // Cap absurdly large dimensions before encoding so a giant photo can
+        // never exhaust memory or balloon processing time.
+        if ($width > self::MAX_LONG_EDGE || $height > self::MAX_LONG_EDGE) {
+            [$width, $height] = $this->boxScaling($width, $height, self::MAX_LONG_EDGE);
+            $image->scale($width, $height);
+        }
+
         // Edge case: already at or below the 1 MB target.
         if ($originalSize <= self::TARGET_MAX_SIZE) {
             return [
-                'data' => (string) $this->encode($source, $format, 95),
+                'data' => (string) $this->encode($image, $format, 95),
                 'original_size' => $originalSize,
                 'compressed_size' => $originalSize,
                 'compression_percent' => 0,
@@ -78,20 +88,18 @@ class ImageCompressionService
         }
 
         // Pass 1: high quality / lossless-style optimization.
-        $candidate = $this->encode($source, $format, self::QUALITY_STEPS[0]);
+        $candidate = $this->encode($image, $format, self::QUALITY_STEPS[0]);
         $size = strlen($candidate);
 
         // Pass 2: gradually walk down in quality until we fit the target.
         if ($size > self::TARGET_MAX_SIZE) {
-            $candidate = $this->walkQuality($source, $format, $width, $height);
+            $candidate = $this->walkQuality($image, $format);
             $size = strlen($candidate);
         }
 
-        // Pass 3: last resort - a modest, proportional downscale keeps quality
-        // acceptable while still slashing the byte count.
+        // Pass 3: last resort - progressively downscale until the file fits.
         if ($size > self::TARGET_MAX_SIZE) {
-            [$width, $height] = $this->scaledDimensions($width, $height);
-            $candidate = $this->walkQuality($source, $format, $width, $height);
+            [$width, $height, $candidate] = $this->downscaleToFit($source, $format, $width, $height);
             $size = strlen($candidate);
         }
 
@@ -111,23 +119,16 @@ class ImageCompressionService
     }
 
     /**
-     * Re-encode the source at a series of decreasing quality levels and keep
-     * the first result that fits the target size. If none fit, the smallest
-     * result is returned.
+     * Re-encode the already-decoded image at a series of decreasing quality
+     * levels and keep the first result that fits the target size. If none
+     * fit, the smallest result is returned. No re-decoding is performed.
      */
-    protected function walkQuality(string $source, string $format, int $width, int $height): string
+    protected function walkQuality(ImageInterface $image, string $format): string
     {
         $best = '';
         $bestSize = PHP_INT_MAX;
 
         foreach (self::QUALITY_STEPS as $quality) {
-            // Re-read from source each time so we never cascade quality loss.
-            $image = $this->manager->decodePath($source);
-
-            if ($width !== $image->width() || $height !== $image->height()) {
-                $image->scale($width, $height);
-            }
-
             $candidate = $this->encode($image, $format, $quality);
             $size = strlen($candidate);
 
@@ -142,6 +143,57 @@ class ImageCompressionService
         }
 
         return $best;
+    }
+
+    /**
+     * Repeatedly downscale the source by 0.85 (each time re-encoding from the
+     * original file) until the result fits under the target size or we hit a
+     * usable minimum dimension. Returns the final dimensions and encoded data.
+     *
+     * @return array{int, int, string}
+     */
+    protected function downscaleToFit(string $source, string $format, int $width, int $height): array
+    {
+        $best = '';
+        $bestSize = PHP_INT_MAX;
+
+        for (;;) {
+            if ($width <= self::MIN_LONG_EDGE || $height <= self::MIN_LONG_EDGE) {
+                break;
+            }
+
+            [$nextWidth, $nextHeight] = $this->scaledDimensions($width, $height);
+
+            // No further progress possible; stop to avoid an infinite loop.
+            if ($nextWidth === $width && $nextHeight === $height) {
+                break;
+            }
+
+            [$width, $height] = [$nextWidth, $nextHeight];
+
+            $image = $this->manager->decodePath($source);
+            $image->scale($width, $height);
+
+            $candidate = $this->walkQuality($image, $format);
+            $size = strlen($candidate);
+
+            if ($size < $bestSize) {
+                $best = $candidate;
+                $bestSize = $size;
+            }
+
+            if ($size <= self::TARGET_MAX_SIZE) {
+                return [$width, $height, $candidate];
+            }
+        }
+
+        // Absolute last resort: return whatever was smallest, even if it is
+        // marginally above the target.
+        if ($best !== '') {
+            return [$width, $height, $best];
+        }
+
+        throw new InvalidArgumentException('Could not compress this image below the target size.');
     }
 
     /**
@@ -172,18 +224,28 @@ class ImageCompressionService
      */
     protected function scaledDimensions(int $width, int $height): array
     {
-        $scale = 0.8;
+        return $this->boxScaling($width, $height, (int) round(max($width, $height) * 0.85));
+    }
 
-        $nextWidth = (int) max(round($width * $scale), self::MIN_DIMENSION);
-        $nextHeight = (int) max(round($height * $scale), self::MIN_DIMENSION);
-
-        if ($width > $height) {
-            $nextHeight = (int) max(round($nextWidth * ($height / $width)), self::MIN_DIMENSION);
-        } else {
-            $nextWidth = (int) max(round($nextHeight * ($width / $height)), self::MIN_DIMENSION);
+    /**
+     * Return proportional dimensions whose longest edge equals $maxEdge,
+     * never going below a usable minimum.
+     *
+     * @return array{int, int}
+     */
+    protected function boxScaling(int $width, int $height, int $maxEdge): array
+    {
+        $long = max($width, $height);
+        if ($long <= $maxEdge) {
+            return [$width, $height];
         }
 
-        return [$nextWidth, $nextHeight];
+        $ratio = $maxEdge / $long;
+
+        return [
+            (int) max(round($width * $ratio), self::MIN_LONG_EDGE),
+            (int) max(round($height * $ratio), self::MIN_LONG_EDGE),
+        ];
     }
 
     protected function formatFromMime(?string $mime): string
