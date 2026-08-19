@@ -1,6 +1,5 @@
 import defaultTheme from 'tailwindcss/defaultTheme';
 import forms from '@tailwindcss/forms';
-import animate from 'tailwindcss-animate';
 
 /** @type {import('tailwindcss').Config} */
 export default {
@@ -53,26 +52,12 @@ export default {
                 },
             },
             borderRadius: {
-                lg: 'var(--radius)',
-                md: 'calc(var(--radius) - 2px)',
-                sm: 'calc(var(--radius) - 4px)',
-            },
-            keyframes: {
-                'fade-in-0up-80': {
-                    '0%': { opacity: '0', transform: 'translateY(8px)' },
-                    '100%': { opacity: '1', transform: 'translateY(0)' },
-                },
-                'fade-in': {
-                    '0%': { opacity: '0' },
-                    '100%': { opacity: '1' },
-                },
-            },
-            animation: {
-                'fade-in-0up-80': 'fade-in-0up-80 0.3s ease-out',
-                'fade-in': 'fade-in 0.3s ease-out',
+                lg: '0.5rem',
+                md: '0.375rem',
+                sm: '0.25rem',
             },
         },
     },
 
-    plugins: [forms, animate],
+    plugins: [forms],
 };
