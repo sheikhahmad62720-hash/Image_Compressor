@@ -15,6 +15,14 @@ defineProps({
 })
 
 defineEmits(['dismiss'])
+
+const emit = defineEmits(['dismiss'])
+const show = ref(true)
+
+setTimeout(() => {
+    show.value = false
+    emit('dismiss')
+}, props.duration)
 </script>
 
 <template>
@@ -37,28 +45,3 @@ defineEmits(['dismiss'])
         </div>
     </Transition>
 </template>
-
-<script setup>
-const props = defineProps({
-    type: {
-        type: String,
-        default: 'info',
-    },
-    message: {
-        type: String,
-        default: 'Action completed',
-    },
-    duration: {
-        type: Number,
-        default: 3000,
-    },
-})
-
-const emit = defineEmits(['dismiss'])
-const show = ref(true)
-
-setTimeout(() => {
-    show.value = false
-    emit('dismiss')
-}, props.duration)
-</script>

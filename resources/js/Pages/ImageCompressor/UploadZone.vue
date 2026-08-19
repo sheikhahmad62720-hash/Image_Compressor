@@ -1,6 +1,5 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { useInertia } from '@inertiajs/vue3'
 
 const props = defineProps({
     accepted: {
@@ -8,8 +7,6 @@ const props = defineProps({
         default: () => ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'],
     },
 })
-
-const { updateProgress } = useInertia()
 
 const dropZone = ref(null)
 const isDragging = ref(false)

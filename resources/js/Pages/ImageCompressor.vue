@@ -1,14 +1,11 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { useInertia } from '@inertiajs/vue3'
 import UploadZone from '@/Pages/ImageCompressor/UploadZone.vue'
 import ImagePreview from '@/Pages/ImageCompressor/ImagePreview.vue'
 import CompressionProgress from '@/Pages/ImageCompressor/CompressionProgress.vue'
 import CompressionResult from '@/Pages/ImageCompressor/CompressionResult.vue'
 import DownloadButton from '@/Pages/ImageCompressor/DownloadButton.vue'
 import Notification from '@/Pages/ImageCompressor/Notification.vue'
-
-const { visit } = useInertia()
 
 const selectedFile = ref(null)
 const originalImage = ref(null)
@@ -26,13 +23,6 @@ const result = ref({
 })
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
-
-// Show result from compression
-watch(showResult, (value) => {
-    if (value) {
-        // Result is passed via Inertia or we set it manually
-    }
-})
 
 const handleFileSelect = (file) => {
     if (!file) return
