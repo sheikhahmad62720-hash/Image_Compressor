@@ -51,6 +51,9 @@ class ImageCompressionService
             ini_set('memory_limit', '512M');
         }
 
+        // Large photos can easily need more than the default 30s budget.
+        @set_time_limit(300);
+
         $originalSize = $file->getSize();
         $format = $this->formatFromMime($file->getMimeType() ?? $file->guessExtension());
 
@@ -132,6 +135,13 @@ class ImageCompressionService
      */
     protected function walkQuality(ImageInterface $image, string $format): string
     {
+        // PNG encoding is lossless and quality-independent, so a single
+        // encode yields the smallest result; looping would only repeat the
+        // same expensive work 11 times.
+        if ($format === 'png') {
+            return $this->encode($image, $format, 0);
+        }
+
         $best = '';
         $bestSize = PHP_INT_MAX;
 
