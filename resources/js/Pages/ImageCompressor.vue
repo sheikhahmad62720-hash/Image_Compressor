@@ -41,6 +41,7 @@ function getCsrfToken() {
 async function handleFileSelect(file) {
     selectedFile.value = file
     originalPreview.value = await readAsDataUrl(file)
+    targetSize.value = file.size
     phase.value = 'config'
 }
 
@@ -99,6 +100,7 @@ async function compress() {
             compressionPercent: data.compression_percent,
             dimensions: data.dimensions,
             format: ext,
+            mode: data.mode || 'compressed',
             originalPreview: originalPreview.value,
             compressedPreview: compressedDataUrl,
             dataUrl: compressedDataUrl,
@@ -192,7 +194,7 @@ const stepDescription = computed(() => {
                         <img :src="originalPreview" alt="Your image" class="max-h-72 w-full object-contain" />
                     </div>
                     <p class="text-center text-xs font-medium text-gray-500">{{ stepDescription }}</p>
-                    <TargetSizeSelector @size-selected="handleSizeSelected" />
+                    <TargetSizeSelector :original-size="selectedFile?.size || targetSize" @size-selected="handleSizeSelected" />
                     <button
                         type="button"
                         @click="startCompress"
