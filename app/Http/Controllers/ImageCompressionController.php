@@ -45,7 +45,7 @@ class ImageCompressionController extends Controller
                 'compression_percent' => $result['compression_percent'],
                 'dimensions' => $result['dimensions'],
                 'format' => $result['format'],
-                'reduced' => $result['reduced'],
+                'mode' => $result['mode'],
             ]);
         } catch (\InvalidArgumentException $e) {
             return response()->json([
