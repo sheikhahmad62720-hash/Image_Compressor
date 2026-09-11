@@ -13,7 +13,10 @@ use InvalidArgumentException;
 
 class ImageCompressionService
 {
-    public const TARGET_MAX_SIZE = 1 * 1024 * 1024; // 1 MB
+    public const DEFAULT_TARGET_MAX_SIZE = 1 * 1024 * 1024; // 1 MB default
+
+    public const MIN_TARGET_SIZE = 50 * 1024;     // 50 KB
+    public const MAX_TARGET_SIZE = 20 * 1024 * 1024; // 20 MB
 
     public const QUALITY_STEPS = [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45];
 
@@ -29,8 +32,9 @@ class ImageCompressionService
     }
 
     /**
-     * Compress an uploaded image to under 1 MB while preserving as much
-     * quality as possible. The original file is never modified.
+     * Compress an uploaded image to fit the requested target size while
+     * preserving as much quality as possible. The original file is never
+     * modified.
      *
      * @return array{
      *     data: string,
@@ -42,8 +46,13 @@ class ImageCompressionService
      *     reduced: bool
      * }
      */
-    public function compress(UploadedFile $file): array
+    public function compress(UploadedFile $file, ?int $targetSize = null): array
     {
+        // Keep the target within sensible bounds.
+        $targetSize = $targetSize === null
+            ? self::DEFAULT_TARGET_MAX_SIZE
+            : max(self::MIN_TARGET_SIZE, min($targetSize, self::MAX_TARGET_SIZE));
+
         // Image decoding/encoding is memory-hungry (a 24MP photo alone needs
         // ~190MB with the encode clone); raise the ceiling for this request.
         $currentLimit = (int) ini_get('memory_limit');
@@ -84,8 +93,8 @@ class ImageCompressionService
             $image->scale($width, $height);
         }
 
-        // Edge case: already at or below the 1 MB target.
-        if ($originalSize <= self::TARGET_MAX_SIZE) {
+        // Edge case: already at or below the target size.
+        if ($originalSize <= $targetSize) {
             return [
                 'data' => (string) $this->encode($image, $format, 95),
                 'original_size' => $originalSize,
@@ -102,14 +111,14 @@ class ImageCompressionService
         $size = strlen($candidate);
 
         // Pass 2: gradually walk down in quality until we fit the target.
-        if ($size > self::TARGET_MAX_SIZE) {
-            $candidate = $this->walkQuality($image, $format);
+        if ($size > $targetSize) {
+            $candidate = $this->walkQuality($image, $format, $targetSize);
             $size = strlen($candidate);
         }
 
         // Pass 3: last resort - progressively downscale until the file fits.
-        if ($size > self::TARGET_MAX_SIZE) {
-            [$width, $height, $candidate] = $this->downscaleToFit($source, $format, $width, $height);
+        if ($size > $targetSize) {
+            [$width, $height, $candidate] = $this->downscaleToFit($source, $format, $width, $height, $targetSize);
             $size = strlen($candidate);
         }
 
@@ -133,7 +142,7 @@ class ImageCompressionService
      * levels and keep the first result that fits the target size. If none
      * fit, the smallest result is returned. No re-decoding is performed.
      */
-    protected function walkQuality(ImageInterface $image, string $format): string
+    protected function walkQuality(ImageInterface $image, string $format, int $targetSize): string
     {
         // PNG encoding is lossless and quality-independent, so a single
         // encode yields the smallest result; looping would only repeat the
@@ -154,7 +163,7 @@ class ImageCompressionService
                 $bestSize = $size;
             }
 
-            if ($size <= self::TARGET_MAX_SIZE) {
+            if ($size <= $targetSize) {
                 return $candidate;
             }
         }
