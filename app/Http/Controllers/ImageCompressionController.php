@@ -14,7 +14,7 @@ class ImageCompressionController extends Controller
     }
 
     /**
-     * Validate and compress an uploaded image to under 1 MB.
+     * Validate and compress an uploaded image to fit the requested target size.
      */
     public function compress(Request $request): JsonResponse
     {
