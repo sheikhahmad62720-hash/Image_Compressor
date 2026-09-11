@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onUnmounted } from 'vue'
 import UploadZone from './ImageCompressor/UploadZone.vue'
+import TargetSizeSelector from './ImageCompressor/TargetSizeSelector.vue'
 import CompressionProgress from './ImageCompressor/CompressionProgress.vue'
 import CompressionResult from './ImageCompressor/CompressionResult.vue'
 import Notification from './ImageCompressor/Notification.vue'
@@ -9,9 +10,10 @@ const selectedFile = ref(null)
 const originalPreview = ref('')
 const compressionProgress = ref(0)
 const isCompressing = ref(false)
-const phase = ref('upload') // 'upload' | 'compressing' | 'result'
+const phase = ref('upload') // 'upload' | 'config' | 'compressing' | 'result'
 const result = ref(null)
 const notification = ref(null)
+const targetSize = ref(1 * 1024 * 1024)
 
 let progressTimer = null
 
@@ -39,8 +41,17 @@ function getCsrfToken() {
 async function handleFileSelect(file) {
     selectedFile.value = file
     originalPreview.value = await readAsDataUrl(file)
-    phase.value = 'compressing'
+    targetSize.value = file.size
+    phase.value = 'config'
+}
+
+function handleSizeSelected(size) {
+    targetSize.value = size
+}
+
+async function startCompress() {
     compressionProgress.value = 0
+    phase.value = 'compressing'
 
     // Friendly simulated progress so the UI feels responsive.
     let fake = 5
@@ -57,6 +68,7 @@ async function compress() {
     try {
         const formData = new FormData()
         formData.append('image', selectedFile.value)
+        formData.append('target_size', targetSize.value)
         formData.append('_token', getCsrfToken())
 
         const response = await fetch('/compress', {
@@ -88,6 +100,7 @@ async function compress() {
             compressionPercent: data.compression_percent,
             dimensions: data.dimensions,
             format: ext,
+            mode: data.mode || 'compressed',
             originalPreview: originalPreview.value,
             compressedPreview: compressedDataUrl,
             dataUrl: compressedDataUrl,
@@ -129,6 +142,7 @@ function reset() {
     originalPreview.value = ''
     result.value = null
     isCompressing.value = false
+    targetSize.value = 1 * 1024 * 1024
     phase.value = 'upload'
 }
 
@@ -152,9 +166,9 @@ const stepDescription = computed(() => {
                 <h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl">
                     <span class="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Image Compressor</span>
                 </h1>
-                <p class="mt-4 text-xl font-semibold text-gray-800">Compress Images Without Losing Quality</p>
+                <p class="mt-4 text-xl font-semibold text-gray-800">Resize Your Image — Smaller or Bigger</p>
                 <p class="mx-auto mt-3 max-w-2xl text-base text-gray-500">
-                    Reduce your image size to under 1&nbsp;MB while keeping it sharp, clear, and visually close to the original.
+                    Shrink your image to a smaller file size, or enlarge it to your target size — your choice, while keeping it sharp and visually close to the original.
                 </p>
             </header>
 
@@ -172,6 +186,25 @@ const stepDescription = computed(() => {
                         <span class="h-1 w-1 rounded-full bg-gray-300" />
                         <span>WebP</span>
                     </div>
+                </section>
+
+                <!-- Config phase -->
+                <section v-else-if="phase === 'config'" class="space-y-6">
+                    <div class="overflow-hidden rounded-2xl border border-gray-200">
+                        <img :src="originalPreview" alt="Your image" class="max-h-72 w-full object-contain" />
+                    </div>
+                    <p class="text-center text-xs font-medium text-gray-500">{{ stepDescription }}</p>
+                    <TargetSizeSelector :original-size="selectedFile?.size || targetSize" @size-selected="handleSizeSelected" />
+                    <button
+                        type="button"
+                        @click="startCompress"
+                        class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-indigo-600/25 transition-all duration-200 hover:bg-indigo-500 hover:shadow-indigo-500/30 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                    >
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                        </svg>
+                        Compress Image
+                    </button>
                 </section>
 
                 <!-- Compressing phase -->

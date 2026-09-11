@@ -14,7 +14,7 @@ class ImageCompressionController extends Controller
     }
 
     /**
-     * Validate and compress an uploaded image to under 1 MB.
+     * Validate and compress an uploaded image to fit the requested target size.
      */
     public function compress(Request $request): JsonResponse
     {
@@ -25,10 +25,17 @@ class ImageCompressionController extends Controller
                 'mimes:jpeg,jpg,png,webp',
                 'max:20480', // 20MB
             ],
+            'target_size' => [
+                'required',
+                'integer',
+                'min:51200',    // 50KB minimum
+                'max:20971520', // 20MB maximum
+            ],
         ]);
 
         try {
-            $result = $this->compressionService->compress($request->file('image'));
+            $targetSize = (int) $request->input('target_size');
+            $result = $this->compressionService->compress($request->file('image'), $targetSize);
 
             return response()->json([
                 'success' => true,
@@ -38,7 +45,7 @@ class ImageCompressionController extends Controller
                 'compression_percent' => $result['compression_percent'],
                 'dimensions' => $result['dimensions'],
                 'format' => $result['format'],
-                'reduced' => $result['reduced'],
+                'mode' => $result['mode'],
             ]);
         } catch (\InvalidArgumentException $e) {
             return response()->json([

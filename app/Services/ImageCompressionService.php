@@ -13,13 +13,22 @@ use InvalidArgumentException;
 
 class ImageCompressionService
 {
-    public const TARGET_MAX_SIZE = 1 * 1024 * 1024; // 1 MB
+    public const DEFAULT_TARGET_MAX_SIZE = 1 * 1024 * 1024; // 1 MB default
+
+    public const MIN_TARGET_SIZE = 50 * 1024;     // 50 KB
+    public const MAX_TARGET_SIZE = 20 * 1024 * 1024; // 20 MB
 
     public const QUALITY_STEPS = [95, 90, 85, 80, 75, 70, 65, 60, 55, 50, 45];
 
     public const MAX_LONG_EDGE = 4096;
 
     public const MIN_LONG_EDGE = 256;
+
+    public const MAX_ENLARGE_LONG_EDGE = 8192;
+
+    public const MAX_ENLARGE_QUALITY = 100;
+
+    public const ENLARGE_STEP = 1.15;
 
     protected ImageManager $manager;
 
@@ -29,8 +38,10 @@ class ImageCompressionService
     }
 
     /**
-     * Compress an uploaded image to under 1 MB while preserving as much
-     * quality as possible. The original file is never modified.
+     * Fit an uploaded image to the requested target size. If the target is
+     * smaller than the original the image is compressed; if it is larger the
+     * image is re-encoded at maximum quality and progressively upscaled until
+     * it reaches the target. The original file is never modified.
      *
      * @return array{
      *     data: string,
@@ -39,11 +50,16 @@ class ImageCompressionService
      *     compression_percent: int,
      *     dimensions: string,
      *     format: string,
-     *     reduced: bool
+     *     mode: string
      * }
      */
-    public function compress(UploadedFile $file): array
+    public function compress(UploadedFile $file, ?int $targetSize = null): array
     {
+        // Keep the target within sensible bounds.
+        $targetSize = $targetSize === null
+            ? self::DEFAULT_TARGET_MAX_SIZE
+            : max(self::MIN_TARGET_SIZE, min($targetSize, self::MAX_TARGET_SIZE));
+
         // Image decoding/encoding is memory-hungry (a 24MP photo alone needs
         // ~190MB with the encode clone); raise the ceiling for this request.
         $currentLimit = (int) ini_get('memory_limit');
@@ -84,8 +100,8 @@ class ImageCompressionService
             $image->scale($width, $height);
         }
 
-        // Edge case: already at or below the 1 MB target.
-        if ($originalSize <= self::TARGET_MAX_SIZE) {
+        // No change needed when the target is identical to the current size.
+        if ($originalSize === $targetSize) {
             return [
                 'data' => (string) $this->encode($image, $format, 95),
                 'original_size' => $originalSize,
@@ -93,7 +109,23 @@ class ImageCompressionService
                 'compression_percent' => 0,
                 'dimensions' => "{$width}x{$height}",
                 'format' => $format,
-                'reduced' => false,
+                'mode' => 'none',
+            ];
+        }
+
+        // Target is larger than the original file: enlarge instead of compress.
+        if ($originalSize < $targetSize) {
+            [$dimensions, $candidate] = $this->enlargeToFit($source, $format, $width, $height, $targetSize);
+            $size = strlen($candidate);
+
+            return [
+                'data' => $candidate,
+                'original_size' => $originalSize,
+                'compressed_size' => $size,
+                'compression_percent' => max(0, (int) round(($size * 100 / $originalSize) - 100)),
+                'dimensions' => $dimensions,
+                'format' => $format,
+                'mode' => 'enlarged',
             ];
         }
 
@@ -102,14 +134,14 @@ class ImageCompressionService
         $size = strlen($candidate);
 
         // Pass 2: gradually walk down in quality until we fit the target.
-        if ($size > self::TARGET_MAX_SIZE) {
-            $candidate = $this->walkQuality($image, $format);
+        if ($size > $targetSize) {
+            $candidate = $this->walkQuality($image, $format, $targetSize);
             $size = strlen($candidate);
         }
 
         // Pass 3: last resort - progressively downscale until the file fits.
-        if ($size > self::TARGET_MAX_SIZE) {
-            [$width, $height, $candidate] = $this->downscaleToFit($source, $format, $width, $height);
+        if ($size > $targetSize) {
+            [$width, $height, $candidate] = $this->downscaleToFit($source, $format, $width, $height, $targetSize);
             $size = strlen($candidate);
         }
 
@@ -124,8 +156,51 @@ class ImageCompressionService
             'compression_percent' => max(0, $compressionPercent),
             'dimensions' => "{$width}x{$height}",
             'format' => $format,
-            'reduced' => true,
+            'mode' => 'compressed',
         ];
+    }
+
+    /**
+     * Re-encode at maximum quality and, if that is not enough, progressively
+     * upscale the image until the resulting file reaches the requested target
+     * size. Never goes beyond the enlarge dimension cap. Returns the final
+     * dimensions and encoded data.
+     *
+     * @return array{string, string}
+     */
+    protected function enlargeToFit(string $source, string $format, int $width, int $height, int $targetSize): array
+    {
+        $best = '';
+        $bestDimensions = "{$width}x{$height}";
+        $bestSize = 0;
+
+        for (;;) {
+            $image = $this->manager->decodePath($source);
+            $image->scale($width, $height);
+
+            $candidate = $this->encode($image, $format, self::MAX_ENLARGE_QUALITY);
+            $size = strlen($candidate);
+
+            if ($size > $bestSize) {
+                $best = $candidate;
+                $bestSize = $size;
+                $bestDimensions = "{$width}x{$height}";
+            }
+
+            if ($size >= $targetSize) {
+                return [$bestDimensions, $best];
+            }
+
+            [$nextWidth, $nextHeight] = $this->upscaledDimensions($width, $height);
+
+            // Cannot grow further without exceeding the dimension cap; return
+            // the largest result produced so far.
+            if ($nextWidth === $width && $nextHeight === $height) {
+                return [$bestDimensions, $best];
+            }
+
+            [$width, $height] = [$nextWidth, $nextHeight];
+        }
     }
 
     /**
@@ -133,7 +208,7 @@ class ImageCompressionService
      * levels and keep the first result that fits the target size. If none
      * fit, the smallest result is returned. No re-decoding is performed.
      */
-    protected function walkQuality(ImageInterface $image, string $format): string
+    protected function walkQuality(ImageInterface $image, string $format, int $targetSize): string
     {
         // PNG encoding is lossless and quality-independent, so a single
         // encode yields the smallest result; looping would only repeat the
@@ -154,7 +229,7 @@ class ImageCompressionService
                 $bestSize = $size;
             }
 
-            if ($size <= self::TARGET_MAX_SIZE) {
+            if ($size <= $targetSize) {
                 return $candidate;
             }
         }
@@ -169,7 +244,7 @@ class ImageCompressionService
      *
      * @return array{int, int, string}
      */
-    protected function downscaleToFit(string $source, string $format, int $width, int $height): array
+    protected function downscaleToFit(string $source, string $format, int $width, int $height, int $targetSize): array
     {
         $best = '';
         $bestSize = PHP_INT_MAX;
@@ -191,7 +266,7 @@ class ImageCompressionService
             $image = $this->manager->decodePath($source);
             $image->scale($width, $height);
 
-            $candidate = $this->walkQuality($image, $format);
+            $candidate = $this->walkQuality($image, $format, $targetSize);
             $size = strlen($candidate);
 
             if ($size < $bestSize) {
@@ -199,7 +274,7 @@ class ImageCompressionService
                 $bestSize = $size;
             }
 
-            if ($size <= self::TARGET_MAX_SIZE) {
+            if ($size <= $targetSize) {
                 return [$width, $height, $candidate];
             }
         }
@@ -242,6 +317,28 @@ class ImageCompressionService
     protected function scaledDimensions(int $width, int $height): array
     {
         return $this->boxScaling($width, $height, (int) round(max($width, $height) * 0.85));
+    }
+
+    /**
+     * Compute a modestly enlarged dimension pair that keeps aspect ratio and
+     * never exceeds the enlarge cap.
+     *
+     * @return array{int, int}
+     */
+    protected function upscaledDimensions(int $width, int $height): array
+    {
+        $long = max($width, $height);
+        if ($long >= self::MAX_ENLARGE_LONG_EDGE) {
+            return [$width, $height];
+        }
+
+        $nextLong = min(self::MAX_ENLARGE_LONG_EDGE, (int) round($long * self::ENLARGE_STEP));
+        $ratio = $nextLong / $long;
+
+        return [
+            max(1, (int) round($width * $ratio)),
+            max(1, (int) round($height * $ratio)),
+        ];
     }
 
     /**
