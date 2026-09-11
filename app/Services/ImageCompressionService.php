@@ -178,7 +178,7 @@ class ImageCompressionService
      *
      * @return array{int, int, string}
      */
-    protected function downscaleToFit(string $source, string $format, int $width, int $height): array
+    protected function downscaleToFit(string $source, string $format, int $width, int $height, int $targetSize): array
     {
         $best = '';
         $bestSize = PHP_INT_MAX;
@@ -200,7 +200,7 @@ class ImageCompressionService
             $image = $this->manager->decodePath($source);
             $image->scale($width, $height);
 
-            $candidate = $this->walkQuality($image, $format);
+            $candidate = $this->walkQuality($image, $format, $targetSize);
             $size = strlen($candidate);
 
             if ($size < $bestSize) {
@@ -208,7 +208,7 @@ class ImageCompressionService
                 $bestSize = $size;
             }
 
-            if ($size <= self::TARGET_MAX_SIZE) {
+            if ($size <= $targetSize) {
                 return [$width, $height, $candidate];
             }
         }
