@@ -166,9 +166,9 @@ const stepDescription = computed(() => {
                 <h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl">
                     <span class="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Image Compressor</span>
                 </h1>
-                <p class="mt-4 text-xl font-semibold text-gray-800">Compress Images Without Losing Quality</p>
+                <p class="mt-4 text-xl font-semibold text-gray-800">Resize Your Image — Smaller or Bigger</p>
                 <p class="mx-auto mt-3 max-w-2xl text-base text-gray-500">
-                    Reduce your image to your target file size while keeping it sharp, clear, and visually close to the original.
+                    Shrink your image to a smaller file size, or enlarge it to your target size — your choice, while keeping it sharp and visually close to the original.
                 </p>
             </header>
 
