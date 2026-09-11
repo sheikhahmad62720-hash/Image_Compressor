@@ -166,7 +166,7 @@ const stepDescription = computed(() => {
                 </h1>
                 <p class="mt-4 text-xl font-semibold text-gray-800">Compress Images Without Losing Quality</p>
                 <p class="mx-auto mt-3 max-w-2xl text-base text-gray-500">
-                    Reduce your image size to under 1&nbsp;MB while keeping it sharp, clear, and visually close to the original.
+                    Reduce your image to your target file size while keeping it sharp, clear, and visually close to the original.
                 </p>
             </header>
 
