@@ -25,10 +25,17 @@ class ImageCompressionController extends Controller
                 'mimes:jpeg,jpg,png,webp',
                 'max:20480', // 20MB
             ],
+            'target_size' => [
+                'required',
+                'integer',
+                'min:51200',    // 50KB minimum
+                'max:20971520', // 20MB maximum
+            ],
         ]);
 
         try {
-            $result = $this->compressionService->compress($request->file('image'));
+            $targetSize = (int) $request->input('target_size');
+            $result = $this->compressionService->compress($request->file('image'), $targetSize);
 
             return response()->json([
                 'success' => true,
